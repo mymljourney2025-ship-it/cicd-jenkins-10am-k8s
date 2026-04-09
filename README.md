@@ -161,3 +161,68 @@ simple-cicd/
 ~$250/month (EKS $73 + 2× t3.large $120 + NAT $35 + NLBs $20)
 
 Destroy when not in use: `./destroy.sh`
+
+### troubleshooting
+# Install EBS CSI driver
+kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.28"
+
+# Give node role permission to manage EBS
+ROLE_NAME=$(aws eks describe-nodegroup --cluster-name simple-cicd-eks --nodegroup-name simple-cicd-nodes --query 'nodegroup.nodeRoleArn' --output text | cut -d/ -f2)
+
+aws iam attach-role-policy \
+    --role-name "${ROLE_NAME}" \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+
+# Restart the driver
+kubectl rollout restart deployment ebs-csi-controller -n kube-system
+
+# Delete stuck pod so it recreates with the PVC now working
+kubectl delete pod -n jenkins -l app=jenkins
+
+# Watch it come up
+kubectl get pods -n jenkins -w
+
+# List node groups
+aws eks list-nodegroups --cluster-name simple-cicd-eks
+
+# Get the role ARN using the actual nodegroup name from above
+aws eks describe-nodegroup \
+    --cluster-name simple-cicd-eks \
+    --nodegroup-name <NAME_FROM_ABOVE> \
+    --query 'nodegroup.nodeRoleArn' --output text
+
+# Find the node role
+aws iam list-roles --query "Roles[?contains(RoleName, 'node')].RoleName" --output text
+
+# Attach the policy using the actual role name
+aws iam attach-role-policy \
+    --role-name simple-cicd-eks-node-role \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+#kubectl describe pvc jenkins-pvc -n jenkins
+vi jenkins/jenkins-deployment.yaml
+before:
+volumes:
+        - name: jenkins-home
+          persistentVolumeClaim:
+            claimName: jenkins-pvc
+
+after:
+volumes:
+        - name: jenkins-home
+          emptyDir: {}
+
+  # Check if ebs-csi-controller is running
+kubectl get pods -n kube-system | grep ebs
+
+# If not installed, install it as an EKS addon
+aws eks create-addon \
+    --cluster-name simple-cicd-eks \
+    --addon-name aws-ebs-csi-driver \
+    --service-account-role-arn $(aws iam list-roles --query "Roles[?contains(RoleName, 'node')].Arn | [0]" --output text)
+#password for jenkins
+kubectl exec -n jenkins deploy/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword
+
+
+
+
+
