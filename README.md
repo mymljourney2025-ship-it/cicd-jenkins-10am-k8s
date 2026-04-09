@@ -214,6 +214,9 @@ volumes:
   # Check if ebs-csi-controller is running
 kubectl get pods -n kube-system | grep ebs
 
+#password
+kubectl exec -n jenkins deploy/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword
+
 # If not installed, install it as an EKS addon
 aws eks create-addon \
     --cluster-name simple-cicd-eks \
